@@ -3,7 +3,12 @@ package tui
 import (
 	"database/sql"
 	"diagnoseQuery/internal/analyse"
+	"diagnoseQuery/internal/encrypt"
+	"diagnoseQuery/internal/history"
+	"fmt"
+	"time"
 
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -15,30 +20,56 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case tea.KeyEnter:
 			if m.state == viewQueryInput {
-				m.state = viewLoading // 로딩 상태로 변경
+				m.state = viewLoading
 				query := m.textarea.Value()
-				// Cmd를 통해 비동기로 쿼리 실행
 				return m, executeQueryCmd(m.dsn, query)
 			}
 		case tea.KeyCtrlE: // Ctrl+E로 분석 실행
 			if m.state == viewQueryInput {
 				m.state = viewLoading
 				query := m.textarea.Value()
-				// Cmd를 통해 비동기로 쿼리 분석
 				return m, analyzeQueryCmd(m.dsn, query)
+			}
+		case tea.KeyTab:
+			// 결과 화면에서 입력 화면으로 돌아가기
+			if m.state == viewQueryResult || m.state == viewAnalysisResult || m.state == viewError {
+				m.state = viewQueryInput
+				m.textarea.Focus()
+				return m, nil
 			}
 		}
 
 	// 비동기 작업 결과 처리
 	case queryResultMsg:
 		m.state = viewQueryResult
-		// ... table 모델에 결과 데이터 설정 ...
+		// 테이블 설정
+		columns := []table.Column{}
+		for _, col := range msg.columns {
+			columns = append(columns, table.Column{Title: col, Width: 15})
+		}
+
+		rows := []table.Row{}
+		for _, row := range msg.rows {
+			rows = append(rows, table.Row(row))
+		}
+
+		m.table = table.New(
+			table.WithColumns(columns),
+			table.WithRows(rows),
+			table.WithFocused(true),
+			table.WithHeight(10),
+		)
 		return m, nil
+
 	case analysisResultMsg:
 		m.state = viewAnalysisResult
 		m.analysisResult = msg.result
-		// ... viewport에 포맷팅된 결과 설정 ...
+		// Set viewport content when we receive the analysis result
+		formatter := analyse.NewResultFormatter()
+		output := formatter.FormatAnalysisResult(&msg.result)
+		m.viewport.SetContent(output)
 		return m, nil
+
 	case errorMsg:
 		m.state = viewError
 		m.err = msg.err
@@ -52,24 +83,121 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.textarea, cmd = m.textarea.Update(msg)
 	case viewQueryResult:
 		m.table, cmd = m.table.Update(msg)
-		// ... 다른 상태에 대한 처리 ...
+	case viewAnalysisResult:
+		m.viewport, cmd = m.viewport.Update(msg)
 	}
 	return m, cmd
 }
 
-// --- Commands ---
-
-func analyzeQueryCmd(dsn, query string) tea.Cmd {
+// executeQueryCmd executes a SQL query and returns the result
+func executeQueryCmd(dsn, query string) tea.Cmd {
 	return func() tea.Msg {
-		conn, _ := sql.Open("postgres", dsn) // 실제로는 에러 처리 필요
-		defer conn.Close()
-		analyzer := analyse.NewQueryAnalyzer(conn)
-		res, err := analyzer.AnalyzeQuery(query)
+		startTime := time.Now()
+
+		conn, err := sql.Open("postgres", dsn)
 		if err != nil {
-			return errorMsg{err}
+			return errorMsg{fmt.Errorf("데이터베이스 연결 실패: %v", err)}
 		}
-		return analysisResultMsg{res}
+		defer conn.Close()
+
+		rows, err := conn.Query(query)
+		if err != nil {
+			// 실패한 쿼리도 히스토리에 저장
+			saveQueryHistory(query, "query", startTime, false, err.Error())
+			return errorMsg{fmt.Errorf("쿼리 실행 실패: %v", err)}
+		}
+		defer rows.Close()
+
+		// 컬럼 정보 가져오기
+		columns, err := rows.Columns()
+		if err != nil {
+			return errorMsg{fmt.Errorf("컬럼 정보 조회 실패: %v", err)}
+		}
+
+		// 결과 데이터 읽기
+		var results [][]string
+		for rows.Next() {
+			values := make([]interface{}, len(columns))
+			valuePtrs := make([]interface{}, len(columns))
+			for i := range values {
+				valuePtrs[i] = &values[i]
+			}
+
+			if err := rows.Scan(valuePtrs...); err != nil {
+				return errorMsg{fmt.Errorf("결과 스캔 실패: %v", err)}
+			}
+
+			row := make([]string, len(columns))
+			for i, v := range values {
+				if v == nil {
+					row[i] = "NULL"
+				} else {
+					valueStr := fmt.Sprintf("%s", v)
+					// Try to decrypt if it looks like encrypted data
+					if decrypted, err := encrypt.FernetDecrypt(valueStr); err == nil && decrypted != "" {
+						row[i] = decrypted
+					} else {
+						row[i] = valueStr
+					}
+				}
+			}
+			results = append(results, row)
+		}
+
+		// 성공한 쿼리 히스토리 저장
+		saveQueryHistory(query, "query", startTime, true, "")
+
+		return queryResultMsg{
+			columns: columns,
+			rows:    results,
+		}
 	}
 }
 
-// TODO: executeQueryCmd 구현
+// analyzeQueryCmd executes query analysis
+func analyzeQueryCmd(dsn, query string) tea.Cmd {
+	return func() tea.Msg {
+		startTime := time.Now()
+
+		conn, err := sql.Open("postgres", dsn)
+		if err != nil {
+			return errorMsg{fmt.Errorf("데이터베이스 연결 실패: %v", err)}
+		}
+		defer conn.Close()
+
+		analyzer := analyse.NewQueryAnalyzer(conn)
+		result, err := analyzer.AnalyzeQuery(query)
+		if err != nil {
+			// 실패한 분석도 히스토리에 저장
+			saveQueryHistory(query, "analyze", startTime, false, err.Error())
+			return errorMsg{fmt.Errorf("쿼리 분석 실패: %v", err)}
+		}
+
+		// 성공한 분석 히스토리 저장
+		saveQueryHistory(query, "analyze", startTime, true, "")
+
+		return analysisResultMsg{result}
+	}
+}
+
+// saveQueryHistory saves query execution history
+func saveQueryHistory(query, queryType string, startTime time.Time, success bool, errorMsg string) {
+	historyMgr, err := history.NewHistoryManager()
+	if err != nil {
+		return // 히스토리 저장 실패는 무시
+	}
+	defer historyMgr.Close()
+
+	executionTime := time.Since(startTime).Seconds() * 1000 // ms로 변환
+
+	historyRecord := history.QueryHistory{
+		Query:         query,
+		QueryType:     queryType,
+		ExecutedAt:    startTime,
+		ExecutionTime: executionTime,
+		Success:       success,
+		ErrorMsg:      errorMsg,
+	}
+
+	historyMgr.SaveQueryHistory(historyRecord)
+}

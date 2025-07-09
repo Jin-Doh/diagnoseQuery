@@ -1,31 +1,59 @@
 // internal/tui/view.go
 package tui
 
-import "diagnoseQuery/internal/analyse"
+import (
+	"strings"
+)
 
 func (m model) View() string {
+	var s strings.Builder
+
 	switch m.state {
 	case viewLoading:
-		return "쿼리 실행 중..." // 스피너 등 활용
+		s.WriteString("🔄 처리 중...\n")
+		s.WriteString("잠시만 기다려주세요.")
+		return s.String()
 
 	case viewQueryResult:
-		// bubbletea/table을 사용하여 결과 렌더링
-		return m.table.View()
-
+		s.WriteString("📊 쿼리 실행 결과\n")
+		s.WriteString(strings.Repeat("─", 50))
+		s.WriteString("\n\n")
+		s.WriteString(m.table.View())
+		s.WriteString("\n\n")
+		s.WriteString("💡 [Tab: 쿼리 입력으로 돌아가기] [Ctrl+C: 종료]")
+		return s.String()
 	case viewAnalysisResult:
-		// formatter를 사용해 결과를 문자열로 만들고 viewport에 렌더링
-		formatter := analyse.NewResultFormatter()
-		output := formatter.FormatAnalysisResult(&m.analysisResult)
-		m.viewport.SetContent(output)
-		return m.viewport.View()
+		s.WriteString("🔍 쿼리 분석 결과\n")
+		s.WriteString(strings.Repeat("─", 50))
+		s.WriteString("\n\n")
+
+		s.WriteString(m.viewport.View())
+		s.WriteString("\n\n")
+		s.WriteString("💡 [Tab: 쿼리 입력으로 돌아가기] [↑↓: 스크롤] [Ctrl+C: 종료]")
+		return s.String()
 
 	case viewError:
-		return "에러: " + m.err.Error()
+		s.WriteString("❌ 오류 발생\n")
+		s.WriteString(strings.Repeat("─", 50))
+		s.WriteString("\n\n")
+		s.WriteString("오류: ")
+		s.WriteString(m.err.Error())
+		s.WriteString("\n\n")
+		s.WriteString("💡 [Tab: 쿼리 입력으로 돌아가기] [Ctrl+C: 종료]")
+		return s.String()
 
 	case viewQueryInput:
 		fallthrough
 	default:
-		// 쿼리 입력창과 하단 도움말 렌더링
-		return m.textarea.View() + "\n\n[Enter: 쿼리 실행] [Ctrl+E: 쿼리 분석] [Ctrl+C: 종료]"
+		s.WriteString("🗄️  DiagnoseQuery - SQL 쿼리 분석 도구\n")
+		s.WriteString(strings.Repeat("─", 50))
+		s.WriteString("\n\n")
+		s.WriteString("SQL 쿼리를 입력하세요:\n\n")
+		s.WriteString(m.textarea.View())
+		s.WriteString("\n\n")
+		s.WriteString("💡 사용법:\n")
+		s.WriteString("  [Enter: 쿼리 실행] [Ctrl+E: 쿼리 분석] [Ctrl+C: 종료]\n")
+		s.WriteString("  [예시: SELECT * FROM users WHERE id = 1]")
+		return s.String()
 	}
 }
