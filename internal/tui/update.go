@@ -89,12 +89,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// getDriverNameFromDSN derives the driver name from the DSN string.
+func getDriverNameFromDSN(dsn string) string {
+	// Example logic: Parse DSN to extract the database type
+	if len(dsn) > 0 {
+		if dsn[:8] == "postgres" {
+			return "postgres"
+		} else if dsn[:5] == "mysql" {
+			return "mysql"
+		} else if dsn[:6] == "sqlite" {
+			return "sqlite3"
+		}
+	}
+	// Default to "postgres" if no match is found
+	return "postgres"
+}
+
 // executeQueryCmd executes a SQL query and returns the result
 func executeQueryCmd(dsn, query string) tea.Cmd {
 	return func() tea.Msg {
 		startTime := time.Now()
 
-		conn, err := sql.Open("postgres", dsn)
+		driverName := getDriverNameFromDSN(dsn)
+		conn, err := sql.Open(driverName, dsn)
 		if err != nil {
 			return errorMsg{fmt.Errorf("데이터베이스 연결 실패: %v", err)}
 		}
