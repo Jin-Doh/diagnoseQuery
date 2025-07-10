@@ -96,7 +96,7 @@ DB_TYPE=postgresql
 # 데이터베이스 연결 정보
 DB_HOST=localhost
 DB_PORT=5432
-DB_NAME=your_database_name
+DB_DB=your_database_name
 DB_USER=your_username
 DB_SECRET=your_password
 DB_SSL_MODE=disable
