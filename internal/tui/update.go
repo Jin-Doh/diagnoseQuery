@@ -161,6 +161,10 @@ func executeQueryCmd(dsn, query string) tea.Cmd {
 			results = append(results, row)
 		}
 
+		// 반복 중 오류 확인
+		if err := rows.Err(); err != nil {
+			return errorMsg{fmt.Errorf("결과 반복 중 오류: %v", err)}
+		}
 		// 성공한 쿼리 히스토리 저장
 		saveQueryHistory(query, "query", startTime, true, "")
 
