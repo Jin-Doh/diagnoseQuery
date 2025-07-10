@@ -11,7 +11,8 @@ func (m model) View() string {
 	switch m.state {
 	case viewLoading:
 		s.WriteString("🔄 처리 중...\n")
-		s.WriteString("잠시만 기다려주세요.")
+		s.WriteString(m.spinner.View())
+		s.WriteString("\n잠시만 기다려주세요.")
 		return s.String()
 
 	case viewQueryResult:
